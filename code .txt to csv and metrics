@@ -1,1 +1,196 @@
-h
+
+import pandas as pd
+import os
+import regex
+import json
+
+def txtToCsv(url):
+#loading the txt file
+    f1Raw=open('/Users/biancamachabee/Desktop/FakeLogs/'+ fileName, 'r').read()
+    f1Raw=json.dumps(f1Raw)
+    f1Raw=json.loads(f1Raw)
+
+#identifying each "block" of text
+    sessionId='(S[0-9]{3}\s*)'
+    UserId='(\s*\w+\s*)'
+    date='(\s[0-9]{4}-[0-9]{2}-[0-9]{2}\s[0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]{3}\s)'
+    words='(\s*\w*\s*)' #this is each words like UML, OnTrigger...
+    lists='(.*)'
+    blockOfDict = r'\{(?:[^{}]|(?R))*\}'
+
+
+#extracting the list of all the data
+    patrick=f"{sessionId},{UserId},{date},{words},{words},{words},{words},{words},{lists}" #pascal told me to put patrick
+    pattern=regex.compile(patrick)
+    rows=pattern.findall(f1Raw)
+
+#extracting the dictionaries 
+    patternDict=regex.compile(blockOfDict)
+    dictionaries=patternDict.findall(f1Raw)
+   
+#making it so that if there's {} elsewhere in the file (for example: "Accept Concept From view {Order}), it doesnt count as a dict
+    dictCleanHalf=[]
+    for item in dictionaries:
+        condition=True
+        for match in rows:
+            liststr= match[-1]
+            if item in liststr:
+                condition=False
+        if condition==True:
+            dictCleanHalf.append(item) #appending the item only if its not also in rows
+    
+
+#splitting the double list into the right two lists
+    llmHalf=[]
+    llm=[]
+    for place in range(len(rows)):
+        twoLists=rows[place][-1] 
+        twoLists=twoLists.split(",") #split the list into all possible pieces
+        for item in twoLists:
+            place=twoLists.index(item)
+            while item.count("[") != item.count("]"): #if the list is not complete its doesn't have the same number of []
+                 #find what is the item thas unequal
+                item+= twoLists[place+1] #add it to the next item
+                twoLists.remove(twoLists[place+1]) #remove the item you just added
+            if item.startswith("[") and item.endswith("]"):
+                item=item[1:-1] #cleaning off the [] so thats it doesn't turn into a list in a list
+            llmHalf.append(item)
+        llm.append(llmHalf) 
+        llmHalf=[]
+      
+#associating each item to the right list
+    llmPrompt=[]
+    llmResponse=[]
+    for listPlace in range(len(llm)):
+        llmPrompt.append(llm[listPlace][0])
+        llmResponse.append(llm[listPlace][1])
+
+#putting it all together in the df
+
+    data= pd.DataFrame(data=rows, columns = ["session_id","user_id","timestamp","modeling_formalism", "element_type", "event_type","event_subtype","action_taken_by_user","llm_prompt"])
+    data = data.iloc[:, :-1]
+    data['llmPrompt'] = llmPrompt
+    data['llmResponse']= llmResponse
+    dictClean=[json.loads(dictCleanHalf[i]) for i in range(len(dictCleanHalf))]
+    data["suggestion list"]= dictClean
+
+# Save to CSV
+    desktop = os.path.expanduser("~/Desktop")
+    csvFolder = os.path.join(desktop, "csvFolder")
+    if not os.path.exists(csvFolder):
+        os.makedirs(csvFolder)
+    pathh=os.path.expanduser("~/Desktop/csvFolder")
+    file_path = os.path.join(pathh, fileName.replace('.txt', '.csv').replace("log_", ""))
+    data.to_csv(file_path, index = False)
+
+def Metrics(mode):
+    totalTime = 0
+    nbTime = 0 
+    tasks = 0
+    sug = 0
+    sugAcc= 0
+    sugMod = 0
+    sugRej = 0
+    edits = 0
+
+    path = os.path.expanduser('~/Desktop/csvFolder')
+    for folder in os.walk(path):
+        for Files in folder:
+            for fileName in Files:
+                if ".csv" and "user" in fileName:
+                    pathh = os.path.expanduser("~/Desktop/csvFolder/"+fileName)
+                    data = pd.read_csv(pathh)
+                else:
+                    continue
+
+    #checking if its an OnTrigger file:
+                type=data.iloc[0, 4]
+                if type == mode :
+
+    #isolating the times for AVERAGE DURATION
+                    for row in range(len(data)):
+                        if data.iloc[row, 5]== " session_start ":
+                            startA=data.iloc[row, 2]
+                        if data.iloc[row, 5]== " session_end ":
+                            endA=data.iloc[row, 2]
+                    start=startA.split(" ")[2]
+                    end=endA.split(" ")[2]
+
+    #substracting the times for AVERAGE DURATION
+                    start=start.split(":")
+                    end=end.split(":")
+                    hours=int(end[0])-int(start[0])
+                    minutes=int(end[1])-int(start[1])
+                    seconds=float(end[2])-float(start[2])
+                    totalTimeIsh=round(hours*3600+minutes*60+seconds, 3)
+
+    #associating the times for each event_type AVERAGE DURATION
+                    totalTime += totalTimeIsh
+                    nbTime += 1
+        
+    #calculating tasks for NB OF STASKS COMPLETED
+                    if totalTime/60<=10:
+                        tasks += 1
+
+    #calulating number of suggestions ACCEPTANCE RATE
+                    for row in range(len(data)):
+                        if data.iloc[row, 5]== " suggestion ":
+                            dictio=data.iloc[row, 10]
+                            di=dictio.replace("'", '"')
+                            d=json.loads(di)
+                            sug+=len(d["suggestions"])                        
+    #counting the number of accepted suggestions
+                        if data.iloc[row, 7] == " accepted ":
+                            sugAcc += 1
+            
+#counting number of modified suggestions:
+                        if data.iloc[row, 7] == " modified ":
+                            sugMod += 1
+                                            
+#counting number of modified suggestions:
+                        if data.iloc[row, 7] == " rejected ":
+                            sugRej += 1
+    #counting number manual edits after suggestions:
+                        if data.iloc[row, 5] == " edit " :
+                                edits += 1 
+                            
+    avgTime=round(totalTime/nbTime, 3)
+    acceptanceRate=round(sugAcc/sug, 3)
+    ModificationRate=round(sugMod/sug, 3)
+    RejectionRate=round(sugRej/sug, 3)
+
+    
+
+    return avgTime, tasks, acceptanceRate, ModificationRate, RejectionRate, edits
+
+
+#going through each folder in the geodes file
+path = os.path.expanduser('~/Desktop/FakeLogs')
+for folder in os.walk(path):
+    for Files in folder:
+        for fileName in Files:
+            if "log" and ".txt" in fileName:
+                txtToCsv(fileName)
+                fileName=fileName.replace('.txt', '.csv').replace("log_", "")
+
+#calculating the metrics           
+
+avgTimeOnTrigger, nbTasksOnTrigger, accRateOnTrigger, modRateOnTrigger, rejRateOnTrigger, editsOnTrigger =Metrics(" OnTrigger ")
+avgTimeOnRequest, nbTasksOnRequest, accRateOnRequest, modRateOnRequest, rejRateOnRequest, editsOnRequest =Metrics(" OnRequest ")
+avgTimeAssessAtEnd, nbTasksAssessAtEnd, accRateAssessAtEnd, modRateAssessAtEnd, rejRateAssessAtEnd, editsAssessAtEnd =Metrics(" assessAtEnd ")
+
+#making setting a dict for metrics
+metric = {
+    "event_type": ["OnTrigger", "OnRequest", "assessAtEnd"],
+    "average time" : [avgTimeOnTrigger,avgTimeOnRequest, avgTimeAssessAtEnd],
+    "Tasks completed" : [nbTasksOnTrigger, nbTasksOnRequest, nbTasksAssessAtEnd],
+    "acceptance rate" : [accRateOnTrigger, accRateOnRequest, accRateAssessAtEnd],
+    "modification rate" : [modRateOnTrigger, modRateOnRequest, modRateAssessAtEnd],
+    "rejection rate" : [rejRateOnTrigger, rejRateOnRequest, rejRateAssessAtEnd],
+    "number of edits" : [editsOnTrigger, editsOnRequest, editsAssessAtEnd]
+}
+df=pd.DataFrame(metric)
+#adding the df to a metrics file
+pathh = os.path.expanduser("~/Desktop/csvFolder")
+file_path = os.path.join(pathh, "metrics.csv")
+df.to_csv(file_path, index = False)
